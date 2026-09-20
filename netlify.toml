@@ -1,0 +1,10 @@
+[build]
+  command = "npm run build"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# Environment variables (DATABASE_URL, DIRECT_URL, FRED_API_KEY) are NOT
+# set here on purpose — set them in the Netlify UI under
+# Site configuration → Environment variables, so real credentials never
+# end up committed to the repo.
