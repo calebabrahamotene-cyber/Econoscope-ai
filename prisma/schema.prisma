@@ -1,0 +1,116 @@
+// EconoScope AI — data model
+//
+// Design principle (per project spec, Section 53): keep DATA COLLECTION,
+// REASONING and PRESENTATION separate. This schema stores the outputs of
+// the first two so the frontend only ever renders structured data.
+//
+// V1 note: no User/auth model yet. Every record is implicitly single-user
+// (local/guest). Multi-user auth is a documented extension point — see
+// README "Known limitations".
+//
+// NETLIFY NOTE: Netlify functions have no persistent filesystem, so SQLite
+// cannot be used in production — every cold start would reset the database.
+// This schema targets Postgres (e.g. a free Neon or Supabase project) for
+// both local dev and production, so behaviour is identical in both places.
+// binaryTargets includes Netlify's function runtime engine alongside your
+// local machine's.
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")   // pooled connection string (for queries)
+  directUrl = env("DIRECT_URL")     // direct connection string (for migrations)
+}
+
+model Asset {
+  id         String   @id @default(cuid())
+  symbol     String   @unique // e.g. "EUR/USD"
+  name       String
+  assetClass String // forex | em-fx | crypto | metal
+  createdAt  DateTime @default(now())
+
+  snapshots DataSnapshot[]
+  analyses  FundamentalAnalysis[]
+}
+
+// One row per real indicator pulled from a real provider at a point in time.
+// This is the raw evidence layer — never fabricated, never overwritten.
+model DataSnapshot {
+  id              String   @id @default(cuid())
+  assetId         String
+  asset           Asset    @relation(fields: [assetId], references: [id])
+  fetchedAt       DateTime @default(now())
+  source          String // "FRED" | "ECB-SDW" | "exchangerate.host" | "coingecko"
+  indicator       String // e.g. "fed_funds_upper", "eu_hicp_yoy"
+  label           String // human-readable, e.g. "US Fed Funds Rate (upper bound)"
+  value           Float
+  unit            String // "%", "index", "USD", etc.
+  observationDate DateTime // date the underlying data point actually refers to
+  raw             String? // raw provider JSON, stringified, for auditability
+
+  @@index([assetId, fetchedAt])
+}
+
+// A saved fundamental analysis. Two ways this gets created:
+//   1) method = "rule-based"     -> lib/scoring/engine.ts computed it from
+//                                    real DataSnapshot rows, deterministically.
+//   2) method = "reasoned-import" -> a human (or an AI assistant reasoning
+//                                     live, e.g. in a chat session) wrote the
+//                                     narrative from real current research,
+//                                     and it was pasted in via /analysis/new.
+// Both are equally "real" — neither is simulated placeholder content.
+model FundamentalAnalysis {
+  id             String   @id @default(cuid())
+  assetId        String
+  asset          Asset    @relation(fields: [assetId], references: [id])
+  createdAt      DateTime @default(now())
+  method         String // "rule-based" | "reasoned-import"
+  score          Int? // -100..100, when available
+  confidence     Int? // 0..100, when available
+  classification String? // e.g. "Moderately Bullish"
+  summary        String // the narrative — required either way
+  strengths      String? // JSON-encoded string[]
+  weaknesses     String? // JSON-encoded string[]
+  sourcesUsed    String? // JSON-encoded [{source, indicator, value, observationDate}]
+
+  notes           ResearchNote[]
+  marketSnapshots MarketSnapshot[]
+  evaluations     Evaluation[]
+}
+
+// A live price pulled at the time of (or after) an analysis, for later
+// comparison against what the fundamental thesis expected.
+model MarketSnapshot {
+  id             String               @id @default(cuid())
+  analysisId     String
+  analysis       FundamentalAnalysis  @relation(fields: [analysisId], references: [id])
+  fetchedAt      DateTime             @default(now())
+  price          Float
+  changePct24h   Float?
+  source         String // "exchangerate.host" | "coingecko"
+}
+
+model ResearchNote {
+  id         String               @id @default(cuid())
+  analysisId String
+  analysis   FundamentalAnalysis  @relation(fields: [analysisId], references: [id])
+  text       String
+  createdAt  DateTime             @default(now())
+}
+
+// The "what actually happened" loop (spec Section 31). Filled in later,
+// by hand, once real outcomes are known.
+model Evaluation {
+  id               String               @id @default(cuid())
+  analysisId       String
+  analysis         FundamentalAnalysis  @relation(fields: [analysisId], references: [id])
+  evaluatedAt      DateTime             @default(now())
+  actualOutcome    String // free text description of what happened
+  priceAtEval      Float?
+  directionCorrect Boolean?
+  notes            String?
+}
